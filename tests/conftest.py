@@ -11,8 +11,8 @@ from app import database, models
 from app.main import app
 
 
-@pytest.fixture
-def db_session():
+@pytest.fixture(scope="session")
+def test_engine():
     test_database_url = os.getenv("TEST_DATABASE_URL", "sqlite://")
 
     engine_options = {}
@@ -21,18 +21,31 @@ def db_session():
         engine_options["connect_args"] = {"check_same_thread": False}
         engine_options["poolclass"] = StaticPool
 
-    test_engine = create_engine(
+    engine = create_engine(
         test_database_url,
         **engine_options,
     )
 
+    models.Base.metadata.create_all(bind=engine)
+
+    try:
+        yield engine
+    finally:
+        models.Base.metadata.drop_all(bind=engine)
+        engine.dispose()
+
+
+@pytest.fixture
+def db_session(test_engine):
+    connection = test_engine.connect()
+    transaction = connection.begin()
+
     TestingSessionLocal = sessionmaker(
+        bind=connection,
         autocommit=False,
         autoflush=False,
-        bind=test_engine,
+        join_transaction_mode="create_savepoint",
     )
-
-    models.Base.metadata.create_all(bind=test_engine)
 
     db = TestingSessionLocal()
 
@@ -40,17 +53,14 @@ def db_session():
         yield db
     finally:
         db.close()
-        models.Base.metadata.drop_all(bind=test_engine)
-        test_engine.dispose()
+        transaction.rollback()
+        connection.close()
 
 
 @pytest.fixture
 def client(db_session):
     def override_get_db():
-        try:
-            yield db_session
-        finally:
-            pass
+        yield db_session
 
     app.dependency_overrides[database.get_db] = override_get_db
 
