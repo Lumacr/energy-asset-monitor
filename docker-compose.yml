@@ -18,7 +18,7 @@ services:
       - "8000:8000"
     environment:
       # Notice that we use 'db' (the service name) instead of 'localhost'
-      - DATABASE_URL=postgresql://user:password@db:5432/energy_db
+      - DATABASE_URL=postgresql+psycopg2://user:password@db:5432/energy_db
     depends_on:
       - db
 

@@ -5,7 +5,7 @@ from sqlalchemy.orm import sessionmaker, declarative_base
 # Uses an environment variable, but defaults to localhost if running outside Docker
 SQLALCHEMY_DATABASE_URL = os.getenv(
     "DATABASE_URL", 
-    "postgresql://user:password@localhost:5432/energy_db"
+    "postgresql+psycopg2://user:password@localhost:5432/energy_db"
 )
 
 engine = create_engine(SQLALCHEMY_DATABASE_URL)
