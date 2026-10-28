@@ -69,7 +69,8 @@ def get_asset_summary(asset_id: int, db: Session = Depends(database.get_db)):
     discharged = db.query(func.sum(models.Telemetry.energy_kwh)).filter(
         models.Telemetry.asset_id == asset_id,
         models.Telemetry.state == "discharging",
-        models.Telemetry.timestamp >= twenty_four_hours_ago
+        models.Telemetry.timestamp >= twenty_four_hours_ago,
+        models.Telemetry.timestamp <= now,
     ).scalar() or 0.0
 
     return schemas.AssetSummaryResponse(
