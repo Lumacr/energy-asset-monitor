@@ -1,6 +1,6 @@
 from fastapi import FastAPI, Depends
 from sqlalchemy.orm import Session
-from . import models, schemas, database
+from . import schemas, database
 from .services import asset_service, telemetry_service, summary_service
 
 
