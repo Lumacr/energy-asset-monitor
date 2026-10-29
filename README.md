@@ -2,7 +2,7 @@
 
 A containerized REST API for managing and monitoring Battery Energy Storage Systems (BESS).
 
-The project simulates a backend service that registers energy assets, records charging and discharging telemetry, and calculates energy consumption and production summaries over a rolling 24-hour window.
+The project simulates a backend service that registers energy assets, records charging and discharging telemetry, and calculates energy summaries over a rolling 24-hour window.
 
 ## Features
 
@@ -11,7 +11,8 @@ The project simulates a backend service that registers energy assets, records ch
 - Validate telemetry states and energy values, including the requirement that idle events have zero energy.
 - Calculate total charged and discharged energy over the last 24 hours using SQL aggregation.
 - Manage database schema changes with Alembic migrations.
-- Run automated tests with pytest.
+- Run automated unit, API, and service-layer tests.
+- Run integration tests against PostgreSQL.
 - Validate tests and database migrations through GitHub Actions.
 
 ## Tech Stack
@@ -33,7 +34,7 @@ To run the application using Docker Compose, you need:
 - Git.
 - Docker with Docker Compose support.
 
-To run tests or database migrations directly on your machine, you also need Python and the dependencies listed in `requirements.txt`.
+To run database migrations or tests directly on your machine, you also need Python and the dependencies listed in `requirements.txt`.
 
 ## Getting Started
 
@@ -54,26 +55,43 @@ docker compose up -d db
 
 Wait until PostgreSQL is ready before continuing.
 
-### 3. Apply database migrations
+The default local database connection is:
 
-Install the Python dependencies in your local environment, then apply the migrations:
+```text
+postgresql+psycopg2://user:password@localhost:5432/energy_db
+```
+
+The application supports overriding this connection through the `DATABASE_URL` environment variable.
+
+### 3. Install dependencies and apply migrations
+
+Create and activate a virtual environment, then install the project dependencies:
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
 python -m pip install -r requirements.txt
+```
+
+Apply the database migrations:
+
+```bash
 alembic upgrade head
 ```
 
-The commands above assume a Unix-like shell and that PostgreSQL is available at the default local connection configured by the project.
+These commands assume that PostgreSQL is reachable through the default local connection or the configured `DATABASE_URL`.
 
-### 4. Start the application
+### 4. Start the API
+
+Ensure that PostgreSQL is healthy and accepting connections before starting the API container.
 
 Build and start the API container:
 
 ```bash
 docker compose up --build -d api
 ```
+
+The API container connects to PostgreSQL using the Docker Compose service name `db`.
 
 The API is available at:
 
@@ -86,7 +104,25 @@ To stop the services:
 docker compose down
 ```
 
-The PostgreSQL data is stored in a Docker volume and is retained when the containers are stopped. To remove the database volume as well, use `docker compose down -v`. This permanently deletes the data stored in that volume.
+PostgreSQL data is stored in a Docker volume and is retained when the containers are stopped. To remove the database volume as well, run:
+
+```bash
+docker compose down -v
+```
+
+**Warning:** This permanently deletes the data stored in the PostgreSQL volume.
+
+## Architecture
+
+The application separates HTTP request handling, business logic, data validation, and database persistence.
+
+- **`app/main.py`:** Defines the FastAPI application and HTTP endpoints. Endpoints delegate operations to the service layer.
+- **`app/services/`:** Contains the asset, telemetry, and summary services. The write services manage database transactions, including commits, refreshes, and rollbacks.
+- **`app/schemas.py`:** Defines Pydantic schemas for request validation and response serialization.
+- **`app/models.py`:** Defines the SQLAlchemy database models and their relationships.
+- **`app/database.py`:** Configures the database engine, session factory, and database dependency.
+- **`alembic/`:** Contains the database migration environment and versioned migrations.
+- **`tests/`:** Contains API and service-layer tests, including integration tests against PostgreSQL.
 
 ## API Endpoints
 
@@ -104,6 +140,8 @@ Request body:
 ```
 
 The capacity must be greater than zero.
+
+Returns the created asset with HTTP status `201 Created`.
 
 ### Record telemetry
 
@@ -129,6 +167,8 @@ Supported states are:
 
 Energy values must be non-negative. When the state is `idle`, the energy value must be zero. The referenced asset must exist.
 
+Returns the created telemetry record with HTTP status `201 Created`.
+
 ### Retrieve an energy summary
 
 `GET /assets/{asset_id}/summary/`
@@ -145,7 +185,7 @@ Example response:
 }
 ```
 
-The values above are illustrative. The endpoint uses SQL aggregation to calculate the totals and returns zero when there are no matching telemetry records. The referenced asset must exist.
+The values above are illustrative. The endpoint uses SQL aggregation to calculate the totals, excludes telemetry outside the rolling 24-hour window (including future timestamps), and returns zero when there are no matching records. The referenced asset must exist.
 
 ## Database Migrations
 
@@ -173,33 +213,52 @@ Activate your virtual environment and install the project dependencies. Then run
 python -m pytest -v
 ```
 
-The current API test suite uses an in-memory SQLite database, keeping the tests isolated from the local PostgreSQL instance.
+By default, the test configuration uses an in-memory SQLite database. This allows the tests to run without connecting to the local PostgreSQL instance.
+
+To run the suite against PostgreSQL, set `TEST_DATABASE_URL` to a dedicated test database:
+
+```bash
+export TEST_DATABASE_URL="postgresql+psycopg2://user:password@localhost:5432/energy_test_db"
+python -m pytest -v
+```
+
+Ensure that the PostgreSQL test database exists and is reachable before running the tests. The test setup creates the schema from the SQLAlchemy models and removes it during teardown, so use a dedicated test database rather than a database containing application data.
 
 ## Continuous Integration
 
-GitHub Actions runs two independent jobs on pushes and pull requests targeting `main`:
+GitHub Actions runs three jobs on pushes and pull requests targeting `main`:
 
-- **`test`:** runs the automated test suite.
-- **`migration-check`:** starts PostgreSQL 15, applies the Alembic migrations to a fresh database, and runs `alembic check`.
+- **`test`:** runs the automated test suite using the default SQLite test configuration.
+- **`migration-check`:** starts PostgreSQL 15, applies the Alembic migrations to a fresh database, and runs `alembic check` to verify schema consistency.
+- **`integration-test`:** starts PostgreSQL 15 and runs the automated test suite against a dedicated PostgreSQL test database.
 
-This verifies the API tests and database migration workflow separately.
+Together, these jobs validate application behavior, database migrations, and integration with PostgreSQL.
 
 ## Project Structure
 
 ```text
 energy-asset-monitor/
 ├── app/
-│   ├── main.py       # API endpoints and application setup
-│   ├── models.py     # SQLAlchemy database models
-│   ├── schemas.py    # Pydantic request and response schemas
-│   └── database.py   # Database engine and session management
+│   ├── main.py
+│   ├── database.py
+│   ├── models.py
+│   ├── schemas.py
+│   └── services/
+│       ├── asset_service.py
+│       ├── telemetry_service.py
+│       └── summary_service.py
 ├── alembic/
-│   ├── versions/     # Versioned database migrations
-│   └── env.py        # Alembic configuration
-├── tests/            # Automated tests
+│   ├── versions/
+│   └── env.py
+├── tests/
+│   ├── conftest.py
+│   ├── test_api.py
+│   ├── test_asset_service.py
+│   ├── test_telemetry_service.py
+│   └── test_summary_service.py
 ├── .github/
 │   └── workflows/
-│       └── ci.yml    # GitHub Actions workflow
+│       └── ci.yml
 ├── Dockerfile
 ├── docker-compose.yml
 ├── alembic.ini
@@ -211,7 +270,6 @@ energy-asset-monitor/
 
 Potential improvements include:
 
-- Add integration tests that execute the API against PostgreSQL.
 - Introduce authentication and authorization.
 - Add rate limiting and more robust production security controls.
 - Improve observability with structured logging, metrics, and health checks.
